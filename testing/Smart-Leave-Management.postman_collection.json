@@ -1,0 +1,2950 @@
+{
+  "info": {
+    "name": "Smart Leave Management API Tests",
+    "description": "End-to-end API tests for the Smart Leave Management System.\n\n**Setup**\n1. Start the Spring Boot backend on http://localhost:8080 with MySQL running.\n2. Import `Smart-Leave-Management.postman_environment.json` and select it.\n3. Run the collection from the Collection Runner or `newman run` (see testing-guide.md).\n\nThe Authentication folder must run first: it captures the JWT for every role into\nenvironment variables that all other folders reuse. Dates are computed at runtime\n(never in the past, never overlapping the seeded demo data).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8080"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Next Monday (strictly in the future) so seeded demo data never collides",
+          "const today = new Date();",
+          "today.setHours(12, 0, 0, 0);",
+          "let delta = (8 - today.getDay()) % 7;",
+          "if (delta === 0) { delta = 7; }",
+          "const mon = new Date(today.getTime() + delta * 86400000);",
+          "const iso = (d) => d.toISOString().slice(0, 10);",
+          "const plus = (d, n) => new Date(d.getTime() + n * 86400000);",
+          "pm.environment.set('start_date', iso(mon));",
+          "pm.environment.set('end_date', iso(plus(mon, 2)));",
+          "pm.environment.set('later_start_date', iso(plus(mon, 14)));",
+          "pm.environment.set('later_end_date', iso(plus(mon, 15)));",
+          "pm.environment.set('unique_suffix', String(Date.now()));"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Authentication",
+      "item": [
+        {
+          "name": "Login as Admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Bearer token returned', () => pm.expect(body.token).to.be.a('string').and.not.be.empty);",
+                  "pm.test('Role is ADMIN', () => pm.expect(body.user.role).to.eql('ADMIN'));",
+                  "pm.test('Password hash is never returned', () => pm.expect(body.user).to.not.have.property('passwordHash'));",
+                  "pm.environment.set('jwt_admin', body.token);"
+                ]
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.environment.set('base_url', pm.collectionVariables.get('base_url') || 'http://localhost:8080');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@smartleave.com\",\n  \"password\": \"{{demo_admin_password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login as Manager 1 (Engineering)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Role is MANAGER', () => pm.expect(body.user.role).to.eql('MANAGER'));",
+                  "pm.environment.set('jwt_manager', body.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"manager1@smartleave.com\",\n  \"password\": \"{{demo_manager_password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login as Manager 2 (Sales)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.environment.set('jwt_manager2', pm.response.json().token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"manager2@smartleave.com\",\n  \"password\": \"{{demo_manager_password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login as Employee 1 (read APIs)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Role is EMPLOYEE', () => pm.expect(body.user.role).to.eql('EMPLOYEE'));",
+                  "pm.environment.set('jwt_employee', body.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"employee1@smartleave.com\",\n  \"password\": \"{{demo_employee_password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login as Employee 3 (workflow applicant)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.environment.set('jwt_employee2', pm.response.json().token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"employee3@smartleave.com\",\n  \"password\": \"{{demo_employee_password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Login as Employee 8 (second team)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.environment.set('jwt_employee3', pm.response.json().token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"employee8@smartleave.com\",\n  \"password\": \"{{demo_employee_password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Register employee (role can never be chosen)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Always EMPLOYEE even when role=ADMIN is posted', () => pm.expect(body.user.role).to.eql('EMPLOYEE'));",
+                  "pm.environment.set('jwt_register', body.token);",
+                  "pm.environment.set('registered_email', body.user.email);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Postman Signer\",\n  \"email\": \"postman.user.{{unique_suffix}}@smartleave.com\",\n  \"password\": \"Postman@123\",\n  \"departmentId\": 1,\n  \"designation\": \"QA Engineer\",\n  \"role\": \"ADMIN\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/register",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Current user from token (/auth/me)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Email matches the principal', () => pm.expect(pm.response.json().email).to.eql('admin@smartleave.com'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Logout (clears httpOnly cookie)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));",
+                  "pm.test('Session cookie cleared', () => {",
+                  "    const cookie = pm.response.headers.get('Set-Cookie') || '';",
+                  "    pm.expect(cookie).to.include('SLM_TOKEN=;');",
+                  "    pm.expect(cookie).to.include('Max-Age=0');",
+                  "    pm.expect(cookie).to.include('HttpOnly');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/logout",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "logout"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Employee APIs",
+      "item": [
+        {
+          "name": "GET Employee dashboard",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Balances returned', () => pm.expect(body.balances).to.have.lengthOf.at.least(3));",
+                  "pm.test('Counters are numbers', () => {",
+                  "    pm.expect(body.pendingCount).to.be.a('number');",
+                  "    pm.expect(body.totalAvailableDays).to.be.a('number');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/employee/dashboard",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "employee",
+                "dashboard"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Employee profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Own profile only', () => pm.expect(pm.response.json().email).to.eql('employee1@smartleave.com'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/employee/profile",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "employee",
+                "profile"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Leave balance",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json();",
+                  "pm.test('One row per leave type', () => pm.expect(rows).to.have.lengthOf.at.least(3));",
+                  "pm.test('available = total - used', () => {",
+                  "    rows.forEach((r) => pm.expect(Number(r.totalDays) - Number(r.usedDays)).to.eql(Number(r.availableDays)));",
+                  "});",
+                  "const casual = rows.find((r) => r.leaveName === 'Casual Leave');",
+                  "pm.environment.set('casual_balance_id', String(casual.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/employee/leave-balance",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "employee",
+                "leave-balance"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Leave types",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const types = pm.response.json();",
+                  "pm.test('Three leave categories', () => pm.expect(types).to.have.lengthOf(3));",
+                  "pm.environment.set('leave_type_id', String(types[0].id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/leave-types",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leave-types"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET My leave requests",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Only own requests are returned', () => {",
+                  "    pm.response.json().forEach((r) => pm.expect(r.employee.email).to.eql('employee1@smartleave.com'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/leaves/my-requests",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "my-requests"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Own request detail (seeded id 1)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Request belongs to the caller', () => pm.expect(pm.response.json().employee.email).to.eql('employee1@smartleave.com'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/leaves/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Notifications",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Array returned', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/notifications",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "notifications"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST Mark notifications read",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/notifications/read-all",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "notifications",
+                "read-all"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Manager APIs",
+      "item": [
+        {
+          "name": "GET Manager dashboard",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Team size >= 4', () => pm.expect(body.teamSize).to.be.at.least(4));",
+                  "pm.test('Team overview present', () => pm.expect(body.team).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_manager}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/manager/dashboard",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "manager",
+                "dashboard"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Pending team requests",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const page = pm.response.json();",
+                  "pm.test('Paginated response', () => {",
+                  "    pm.expect(page).to.have.property('content').that.is.an('array');",
+                  "    pm.expect(page).to.have.property('totalElements');",
+                  "});",
+                  "pm.test('Only own team members appear', () => {",
+                  "    page.content.forEach((r) => pm.expect(r.employee.managerName).to.eql('Priya Sharma'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_manager}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/manager/requests?status=PENDING&page=0&size=20",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "manager",
+                "requests"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "PENDING"
+                },
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "20"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Manager team overview",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Four team members', () => pm.expect(pm.response.json()).to.have.lengthOf(4));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_manager}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/manager/team",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "manager",
+                "team"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Leave Application Workflow",
+      "item": [
+        {
+          "name": "Apply for leave (employee3, 3 working days)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Starts as PENDING', () => pm.expect(body.status).to.eql('PENDING'));",
+                  "pm.test('Weekends excluded (Mon-Wed = 3)', () => pm.expect(Number(body.totalDays)).to.eql(3));",
+                  "pm.environment.set('new_application_id', String(body.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee2}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leaveTypeId\": {{leave_type_id}},\n  \"startDate\": \"{{start_date}}\",\n  \"endDate\": \"{{end_date}}\",\n  \"reason\": \"Postman workflow test - family event\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/leaves/apply",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "apply"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Balance is NOT deducted on submit",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const casual = pm.response.json().find((r) => r.leaveName === 'Casual Leave');",
+                  "pm.test('Balance untouched while PENDING', () => pm.expect(Number(casual.usedDays)).to.eql(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee2}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/employee/leave-balance",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "employee",
+                "leave-balance"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Manager sees the request in Pending",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const found = pm.response.json().content.some((r) => String(r.id) === pm.environment.get('new_application_id'));",
+                  "pm.test('Request is visible to the reporting manager', () => pm.expect(found).to.be.true);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_manager}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/manager/requests?status=PENDING&page=0&size=50",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "manager",
+                "requests"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "PENDING"
+                },
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "50"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Approve the request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Status APPROVED', () => pm.expect(body.status).to.eql('APPROVED'));",
+                  "pm.test('Approver recorded', () => pm.expect(body.approvedByName).to.eql('Priya Sharma'));",
+                  "pm.test('Remarks stored', () => pm.expect(body.managerRemarks).to.eql('Approved via Postman'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_manager}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"remarks\": \"Approved via Postman\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/manager/requests/{{new_application_id}}/approve",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "manager",
+                "requests",
+                "{{new_application_id}}",
+                "approve"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Balance is deducted after approval",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const casual = pm.response.json().find((r) => r.leaveName === 'Casual Leave');",
+                  "pm.test('3 days deducted', () => pm.expect(Number(casual.usedDays)).to.eql(3));",
+                  "pm.test('12 - 3 = 9 available', () => pm.expect(Number(casual.availableDays)).to.eql(9));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee2}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/employee/leave-balance",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "employee",
+                "leave-balance"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Employee sees APPROVED status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Status APPROVED', () => pm.expect(pm.response.json().status).to.eql('APPROVED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee2}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/leaves/{{new_application_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "{{new_application_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reject without remarks -> 400 (seeded request)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Message mentions remarks', () => pm.expect(pm.response.json().message).to.include('remarks'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_manager}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"remarks\": \"\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/manager/requests/4/reject",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "manager",
+                "requests",
+                "4",
+                "reject"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Apply then reject with remarks (employee8)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.environment.set('second_application_id', String(pm.response.json().id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee3}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leaveTypeId\": {{leave_type_id}},\n  \"startDate\": \"{{later_start_date}}\",\n  \"endDate\": \"{{later_end_date}}\",\n  \"reason\": \"Postman rejection workflow test\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/leaves/apply",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "apply"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Reject the request with remarks",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Status REJECTED', () => pm.expect(body.status).to.eql('REJECTED'));",
+                  "pm.test('Remarks stored', () => pm.expect(body.managerRemarks).to.eql('Client visit that week'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_manager2}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"remarks\": \"Client visit that week\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/manager/requests/{{second_application_id}}/reject",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "manager",
+                "requests",
+                "{{second_application_id}}",
+                "reject"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Rejection did not touch the balance",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const casual = pm.response.json().find((r) => r.leaveName === 'Casual Leave');",
+                  "pm.test('Still 0 used', () => pm.expect(Number(casual.usedDays)).to.eql(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee3}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/employee/leave-balance",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "employee",
+                "leave-balance"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Apply then cancel own pending request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.environment.set('cancel_application_id', String(pm.response.json().id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee3}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leaveTypeId\": {{leave_type_id}},\n  \"startDate\": \"{{start_date}}\",\n  \"endDate\": \"{{end_date}}\",\n  \"reason\": \"Postman cancellation test\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/leaves/apply",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "apply"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cancel the pending request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Status CANCELLED', () => pm.expect(body.status).to.eql('CANCELLED'));",
+                  "pm.test('Remarks recorded', () => pm.expect(body.managerRemarks).to.include('Cancelled by employee'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee3}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"remarks\": \"Plans changed\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/leaves/{{cancel_application_id}}/cancel",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "{{cancel_application_id}}",
+                "cancel"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Admin APIs",
+      "item": [
+        {
+          "name": "GET Admin dashboard",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('3 departments', () => pm.expect(body.totalDepartments).to.be.at.least(3));",
+                  "pm.test('11 seeded employees', () => pm.expect(body.totalEmployees).to.be.at.least(11));",
+                  "pm.test('Counters consistent', () => pm.expect(body.totalApplications).to.be.at.least(body.pendingCount));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "dashboard"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Employees (paginated + search)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const page = pm.response.json();",
+                  "pm.test('Page size respected', () => pm.expect(page.content).to.have.lengthOf(5));",
+                  "pm.test('Pagination metadata', () => {",
+                  "    pm.expect(page).to.have.property('totalElements').that.is.at.least(11);",
+                  "    pm.expect(page).to.have.property('totalPages').that.is.at.least(1);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/employees?page=0&size=5",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "employees"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "5"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST Create employee",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Employee created active', () => pm.expect(body.active).to.be.true);",
+                  "pm.environment.set('new_employee_id', String(body.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Postman Created\",\n  \"email\": \"postman.employee.{{unique_suffix}}@smartleave.com\",\n  \"password\": \"Postman@123\",\n  \"departmentId\": 1,\n  \"managerId\": 2,\n  \"designation\": \"Test Engineer\",\n  \"role\": \"EMPLOYEE\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/employees",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "employees"
+              ]
+            }
+          }
+        },
+        {
+          "name": "PUT Update employee",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Designation updated', () => pm.expect(pm.response.json().designation).to.eql('Senior Test Engineer'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"designation\": \"Senior Test Engineer\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/employees/{{new_employee_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "employees",
+                "{{new_employee_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Created employee leave balances",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Balances provisioned from entitlement', () => pm.expect(pm.response.json()).to.have.lengthOf(3));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/employees/{{new_employee_id}}/leave-balances",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "employees",
+                "{{new_employee_id}}",
+                "leave-balances"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Departments",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('At least the three seeded departments', () => pm.expect(pm.response.json().length).to.be.at.least(3));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "departments"
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST Create department",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.environment.set('new_department_id', String(pm.response.json().id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"departmentName\": \"QA {{unique_suffix}}\",\n  \"description\": \"Created by the Postman collection\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "departments"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET All leave applications (filtered)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const page = pm.response.json();",
+                  "pm.test('Paginated', () => pm.expect(page.content).to.be.an('array'));",
+                  "pm.test('Status filter applied', () => {",
+                  "    page.content.forEach((r) => pm.expect(r.status).to.eql('PENDING'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/applications?status=PENDING&page=0&size=10",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "applications"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "PENDING"
+                },
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Reports (department + monthly)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Department rows', () => pm.expect(body.byDepartment.length).to.be.at.least(3));",
+                  "pm.test('Monthly rows', () => pm.expect(body.byMonth.length).to.be.at.least(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/reports",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "reports"
+              ]
+            }
+          }
+        },
+        {
+          "name": "PUT Adjust leave entitlement",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Total updated to 20', () => pm.expect(Number(body.totalDays)).to.eql(20));",
+                  "pm.test('Available recalculated', () => pm.expect(Number(body.availableDays)).to.eql(20 - Number(body.usedDays)));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": {{casual_balance_id}},\n  \"totalDays\": 20\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/leave-balances/{{casual_balance_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "leave-balances",
+                "{{casual_balance_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "PUT Restore leave entitlement to 12 days",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Back to the seeded 12 days', () => pm.expect(Number(pm.response.json().totalDays)).to.eql(12));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": {{casual_balance_id}},\n  \"totalDays\": 12\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/leave-balances/{{casual_balance_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "leave-balances",
+                "{{casual_balance_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "DELETE (deactivate) the created employee",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Employee deactivated (soft delete)', () => pm.expect(pm.response.json().active).to.be.false);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/employees/{{new_employee_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "employees",
+                "{{new_employee_id}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Negative and Security Tests",
+      "item": [
+        {
+          "name": "No token -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+                  "pm.test('JSON error body', () => pm.expect(pm.response.json().code).to.eql('UNAUTHORIZED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "dashboard"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Invalid JWT -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer not.a.valid.jwt.token"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/employee/dashboard",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "employee",
+                "dashboard"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Employee calling admin API -> 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', () => pm.response.to.have.status(403));",
+                  "pm.test('Forbidden body', () => pm.expect(pm.response.json().code).to.eql('FORBIDDEN'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/dashboard",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "dashboard"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Employee calling manager API -> 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/manager/requests",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "manager",
+                "requests"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Manager calling admin API -> 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_manager}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/employees",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "employees"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Wrong password -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Generic message (no account enumeration)', () => pm.expect(pm.response.json().message).to.eql('Invalid email or password'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@smartleave.com\",\n  \"password\": \"{{demo_admin_password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Unknown email -> 401 (same message)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Same message as wrong password', () => pm.expect(pm.response.json().message).to.eql('Invalid email or password'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"ghost.user.{{unique_suffix}}@smartleave.com\",\n  \"password\": \"whatever123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Employee reading another employee's request -> 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404 (existence not leaked)', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/leaves/{{new_application_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "{{new_application_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Invalid application id -> 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/leaves/999999",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "999999"
+              ]
+            }
+          }
+        },
+        {
+          "name": "End date before start date -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Clear message', () => pm.expect(pm.response.json().message).to.include('End date cannot be before start date'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leaveTypeId\": {{leave_type_id}},\n  \"startDate\": \"{{end_date}}\",\n  \"endDate\": \"{{start_date}}\",\n  \"reason\": \"Backwards date range test\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/leaves/apply",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "apply"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Start date in the past -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Mentions past', () => pm.expect(pm.response.json().message).to.include('past'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leaveTypeId\": {{leave_type_id}},\n  \"startDate\": \"2020-01-06\",\n  \"endDate\": \"2020-01-07\",\n  \"reason\": \"Historic leave test\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/leaves/apply",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "apply"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Short reason -> 400 validation error",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Field errors returned', () => pm.expect(pm.response.json().fieldErrors).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leaveTypeId\": {{leave_type_id}},\n  \"startDate\": \"{{start_date}}\",\n  \"endDate\": \"{{start_date}}\",\n  \"reason\": \"x\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/leaves/apply",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "apply"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Overlap with the approved request -> 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));",
+                  "pm.test('Message mentions overlap', () => pm.expect(pm.response.json().message).to.include('Overlapping'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee2}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leaveTypeId\": {{leave_type_id}},\n  \"startDate\": \"{{start_date}}\",\n  \"endDate\": \"{{end_date}}\",\n  \"reason\": \"Overlapping request test\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/leaves/apply",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "apply"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Repeated approval -> 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));",
+                  "pm.test('States the current status', () => pm.expect(pm.response.json().message).to.include('APPROVED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_manager}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"remarks\": \"trying twice\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/manager/requests/{{new_application_id}}/approve",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "manager",
+                "requests",
+                "{{new_application_id}}",
+                "approve"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Manager approving outside his team -> 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', () => pm.response.to.have.status(403));",
+                  "pm.test('Team message', () => pm.expect(pm.response.json().message).to.include('own team'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_manager}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"remarks\": \"not my team\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/manager/requests/{{second_application_id}}/approve",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "manager",
+                "requests",
+                "{{second_application_id}}",
+                "approve"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Setup: manager applies for his own leave",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.environment.set('manager_application_id', String(pm.response.json().id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_manager2}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leaveTypeId\": {{leave_type_id}},\n  \"startDate\": \"{{later_start_date}}\",\n  \"endDate\": \"{{later_start_date}}\",\n  \"reason\": \"Manager self approval test\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/leaves/apply",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "apply"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Self approval -> 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', () => pm.response.to.have.status(403));",
+                  "pm.test('Forbidden', () => pm.expect(pm.response.json().code).to.eql('FORBIDDEN'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_manager2}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"remarks\": \"approve myself\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/manager/requests/{{manager_application_id}}/approve",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "manager",
+                "requests",
+                "{{manager_application_id}}",
+                "approve"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Setup: read employee8 casual balance id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const casual = pm.response.json().find((r) => r.leaveName === 'Casual Leave');",
+                  "pm.environment.set('casual_balance_id', String(casual.id));",
+                  "pm.test('Casual balance row found', () => pm.expect(casual).to.be.an('object'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee3}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/employee/leave-balance",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "employee",
+                "leave-balance"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Setup: set employee8 balance to 1 day",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Only 1 day available now', () => pm.expect(Number(pm.response.json().availableDays)).to.eql(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": {{casual_balance_id}},\n  \"totalDays\": 1\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/leave-balances/{{casual_balance_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "leave-balances",
+                "{{casual_balance_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Setup: apply for 2 days with only 1 available",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201 (submission is allowed)', () => pm.response.to.have.status(201));",
+                  "pm.environment.set('insufficient_application_id', String(pm.response.json().id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee3}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leaveTypeId\": {{leave_type_id}},\n  \"startDate\": \"{{later_start_date}}\",\n  \"endDate\": \"{{later_end_date}}\",\n  \"reason\": \"More days than available\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/leaves/apply",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "apply"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Insufficient balance blocks approval -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Message explains the balance', () => pm.expect(pm.response.json().message).to.include('Insufficient leave balance'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_manager2}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"remarks\": \"should fail\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/manager/requests/{{insufficient_application_id}}/approve",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "manager",
+                "requests",
+                "{{insufficient_application_id}}",
+                "approve"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Request stays PENDING after the failed approval",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Still PENDING (transaction rolled back)', () => pm.expect(pm.response.json().status).to.eql('PENDING'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_employee3}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/leaves/{{insufficient_application_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leaves",
+                "{{insufficient_application_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cleanup: restore the balance to 12 days",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Restored', () => pm.expect(Number(pm.response.json().totalDays)).to.eql(12));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": {{casual_balance_id}},\n  \"totalDays\": 12\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/leave-balances/{{casual_balance_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "leave-balances",
+                "{{casual_balance_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Malformed JSON body -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Malformed body message', () => pm.expect(pm.response.json().message).to.include('malformed'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{ this is not json"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/departments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "departments"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Duplicate email on registration -> 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Duplicate\",\n  \"email\": \"admin@smartleave.com\",\n  \"password\": \"{{demo_admin_password}}\",\n  \"departmentId\": 1,\n  \"designation\": \"Boss\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/register",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Admin cannot be created through the admin API -> 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400 (validation)', () => pm.response.to.have.status(400));",
+                  "pm.test('Role rejected', () => pm.expect(JSON.stringify(pm.response.json().fieldErrors)).to.include('EMPLOYEE or MANAGER'));",
+                  "pm.test('Message mentions the rejected role', () => pm.expect(JSON.stringify(pm.response.json())).to.include('\"role\"'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_admin}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Sneaky Admin\",\n  \"email\": \"sneaky.admin.{{unique_suffix}}@smartleave.com\",\n  \"password\": \"Admin@12345\",\n  \"departmentId\": 1,\n  \"designation\": \"Boss\",\n  \"role\": \"ADMIN\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/employees",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "employees"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Foreign origin preflight is refused (CORS)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const allowOrigin = pm.response.headers.get('Access-Control-Allow-Origin');",
+                  "pm.test('No ACAO header for a foreign origin', () => pm.expect(allowOrigin).to.not.eql('http://evil.example'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "OPTIONS",
+            "header": [
+              {
+                "key": "Origin",
+                "value": "http://evil.example"
+              },
+              {
+                "key": "Access-Control-Request-Method",
+                "value": "POST"
+              },
+              {
+                "key": "Access-Control-Request-Headers",
+                "value": "Content-Type"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
