@@ -1,4 +1,6 @@
-# Smart Leave Management System
+# DBSBD_HACKATHON
+
+## Smart Leave Management System
 
 A full-stack leave management application built for a college mini-hackathon.
 Employees apply for leave, managers approve or reject it from their own team,
